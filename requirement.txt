@@ -1,0 +1,17 @@
+transformers==5.23.0
+datasets==5.2.0
+accelerate==1.16.0
+peft==0.21.3
+trl==1.18.1
+
+bitsandbytes>=0.45
+
+scikit-learn
+numpy
+pandas
+matplotlib
+
+sentencepiece
+protobuf
+
+sacrebleu
