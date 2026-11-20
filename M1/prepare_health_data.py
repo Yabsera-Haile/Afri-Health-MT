@@ -41,11 +41,12 @@ def token_len(col,tokenizer,lang,batch=512):
 def load_mt_dataset(name, config, split, lang1,lang2,tokenizer):
   dataset=load_dataset(name,config,split=split).select_columns([lang1,lang2])
   print("data size before ",len(dataset[lang1]),len(dataset[lang2]))
-  dataset = dataset.map(lambda row: clean_row(row,[lang1,lang2]))
+  dataset = dataset.map(clean_row, fn_kwargs={"languages": [lang1, lang2]})
   dataset = dataset.filter(lambda row: check_pair(row[lang1],row[lang2]))
   total_tokens= token_len(dataset[lang1],tokenizer,lang1) + token_len(dataset[lang2],tokenizer,lang2)
+  dataset = dataset.add_column("n_tokens", total_tokens.tolist())
   p=np.percentile(total_tokens,[50,95,99])
-  print(f"Token sieze: p50={p[0]:.0f}  p95={p[1]:.0f}  p99={p[2]:.0f}  max={total_tokens.max()}")
+  print(f"Token size: p50={p[0]:.0f}  p95={p[1]:.0f}  p99={p[2]:.0f}  max={total_tokens.max()}")
   
   print("data size after ", len(dataset[lang1]),len(dataset[lang2]))
   return dataset
