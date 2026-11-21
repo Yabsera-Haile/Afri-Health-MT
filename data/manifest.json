@@ -1,0 +1,39 @@
+{
+  "dataset": "masakhane/AfriDocMT",
+  "dataset_sha": "8ae06a3f73aa9194a0d29b32e6c1037b3f9420fb",
+  "model_template": "TranslatePsy",
+  "direction": "en->xx",
+  "targets": [
+    [
+      "en",
+      "am"
+    ],
+    [
+      "en",
+      "ha"
+    ],
+    [
+      "en",
+      "sw"
+    ],
+    [
+      "en",
+      "yo"
+    ],
+    [
+      "en",
+      "zu"
+    ]
+  ],
+  "chunk_config": "doc_health_5",
+  "max_len": "None",
+  "seed": 42,
+  "counts": {
+    "train_sent": 35199,
+    "train_chunk": 7530,
+    "train_mix": 42729,
+    "val": 5929,
+    "test_sent": 9910,
+    "test_chunk": 2085
+  }
+}
