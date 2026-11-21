@@ -1,5 +1,5 @@
 transformers==5.23.0
-datasets==5.2.0
+datasets
 accelerate==1.16.0
 peft==0.21.3
 trl==1.18.1
