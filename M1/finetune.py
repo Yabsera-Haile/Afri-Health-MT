@@ -73,21 +73,25 @@ def setup_tokenizer(tokenizer, pad_side="right"):
 
 
 def tokenize(row, tokenizer,max_len=None):
+    target = row["completion"][0]["content"]
 
-    prompt = _ids(tokenizer.apply_chat_template(row["prompt"],tokenize=True,add_generation_prompt=True,enable_thinking=False))
-    full = _ids(tokenizer.apply_chat_template(row["prompt"]+row["completion"],tokenize=True,enable_thinking=False))
+    prompt_text = tokenizer.apply_chat_template(row["prompt"], tokenize=False,
+                                                add_generation_prompt=True, enable_thinking=False)
 
-    if full[:len(prompt)]!=prompt:
-        raise ValueError("Something is wrong with the template full doesn't follow format of the prompt")
+    full_text = tokenizer.apply_chat_template(row["prompt"] + row["completion"], tokenize=False,
+                                              enable_thinking=False)
+    end = full_text[full_text.rindex(target) + len(target):]
 
-    label = [-100] * len(prompt) + full[len(prompt):]
+    prompt = tokenizer(prompt_text, add_special_tokens=False)["input_ids"]
+    answer = tokenizer(target + end, add_special_tokens=False)["input_ids"]
 
-    if bool(max_len) and len(full) > max_len:
-        # full,label = full[:max_len],label[:max_len]
-        raise ValueError("Size of row is larger that max length:",max_len)
+    full = prompt + answer
+    labels = [-100] * len(prompt) + answer
 
-    mask=[1]*len(full)
-    return {"input_ids":full,"labels":label,"attention_mask":mask}
+    if max_len and len(full) > max_len:
+        raise ValueError(f"Row longer than max_len={max_len}: {len(full)} tokens")
+
+    return {"input_ids": full, "labels": labels, "attention_mask": [1] * len(full)}
 
 
 def get_collator(cfg, tokenizer, model=None):
