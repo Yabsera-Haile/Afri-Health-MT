@@ -296,18 +296,86 @@ def glotlid_predict(model, text):
 
 
 # ----------------------------------------------------------------------------- SSA-COMET
-def comet_scores(srcs, hyps, refs=None, model_name=SSA_COMET_QE, batch_size=32, gpus=1):
-    """
-    Run in an environment with `pip install unbabel-comet` (may clash with the training env).
-    refs=None -> QE model (source + translation only).
-    Note: COMET models read at most ~512 tokens; use on sentence-level outputs.
-    """
+# unbabel-comet needs Transformers 4 and clashes with the training stack (Transformers 5,
+# Colab's TensorFlow/protobuf). So COMET runs in a private Python env that this module
+# creates and calls by itself; the notebook only calls the functions below.
+COMET_ENV = "/content/comet-env"
+
+
+def _comet_python(env_dir=COMET_ENV):
+    return os.path.join(env_dir, "bin", "python")
+
+
+def setup_comet_env(env_dir=COMET_ENV, python_version="3.11"):
+    """Create the private COMET environment once per runtime (a few minutes)."""
+    import subprocess, sys
+    if os.path.exists(_comet_python(env_dir)):
+        print("COMET env ready:", env_dir)
+        return env_dir
+    subprocess.run([sys.executable, "-m", "pip", "install", "-q", "uv"], check=True)
+    subprocess.run([sys.executable, "-m", "uv", "venv", env_dir, "--python", python_version], check=True)
+    subprocess.run([sys.executable, "-m", "uv", "pip", "install", "--python", _comet_python(env_dir),
+                    "unbabel-comet", "sacrebleu"], check=True)
+    print("COMET env ready:", env_dir)
+    return env_dir
+
+
+def _comet_predict_inprocess(data, model_name, batch_size, gpus):
     from comet import download_model, load_from_checkpoint
     model = load_from_checkpoint(download_model(model_name))
+    out = model.predict(data, batch_size=batch_size, gpus=gpus, progress_bar=False)
+    return {"system": float(out.system_score), "segments": [float(x) for x in out.scores]}
+
+
+def comet_scores(srcs, hyps, refs=None, model_name=SSA_COMET_QE, batch_size=32, gpus=1,
+                 env_dir=COMET_ENV):
+    """
+    SSA-COMET for one list of segments. refs=None -> QE model (source + translation only).
+    Runs inside the private env (setup_comet_env) if it exists, otherwise in this process.
+    COMET reads at most ~512 tokens, so use it on sentence-level outputs.
+    """
+    import subprocess, tempfile
     data = [{"src": norm(s), "mt": norm(h)} | ({"ref": norm(r)} if refs is not None else {})
             for s, h, r in zip(srcs, hyps, refs if refs is not None else [None] * len(hyps))]
-    out = model.predict(data, batch_size=batch_size, gpus=gpus)
-    return {"system": round(float(out.system_score), 4), "segments": list(out.scores)}
+    if not os.path.exists(_comet_python(env_dir)):
+        return _comet_predict_inprocess(data, model_name, batch_size, gpus)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        fin, fout = os.path.join(tmp, "in.json"), os.path.join(tmp, "out.json")
+        json.dump(data, open(fin, "w", encoding="utf-8"), ensure_ascii=False)
+        env = os.environ | {"USE_TF": "0", "TRANSFORMERS_NO_TF": "1"}
+        proc = subprocess.run([_comet_python(env_dir), os.path.abspath(__file__), "--comet-worker",
+                               fin, fout, model_name, str(batch_size), str(gpus)],
+                              env=env, capture_output=True, text=True)
+        if proc.returncode != 0:
+            raise RuntimeError("COMET worker failed:\n" + proc.stderr[-3000:])
+        return json.load(open(fout))
+
+
+def comet_for_system(outputs, units_ds, langs=("am", "ha", "sw", "yo", "zu"),
+                     models=None, cache_path=None, **kw):
+    """
+    SSA-COMET (+QE) for one system's sentence-level outputs, per language.
+    Returns {lang: {metric: {"system", "segments"}}} -> pass as comet_by_lang to evaluate_system.
+    Segments follow row_id order (same as evaluate_language). Cached to cache_path if given.
+    """
+    if cache_path and os.path.exists(cache_path):
+        return json.load(open(cache_path))
+    models = models or {"ssa_comet_qe": SSA_COMET_QE}
+    res = {}
+    for lang in langs:
+        o = sorted([x for x in outputs if _target(x) == lang], key=lambda x: x["row_id"])
+        if not o:
+            continue
+        srcs = [units_ds[x["row_id"]]["en"] for x in o]
+        refs = [units_ds[x["row_id"]][lang] for x in o]
+        hyps = [x["hypothesis"] for x in o]
+        res[lang] = {k: comet_scores(srcs, hyps, None if k.endswith("_qe") else refs, model_name=m, **kw)
+                     for k, m in models.items()}
+        print(lang, {k: round(v["system"], 4) for k, v in res[lang].items()})
+    if cache_path:
+        json.dump(res, open(cache_path, "w"))
+    return res
 
 
 # ----------------------------------------------------------------------------- evaluation
@@ -422,3 +490,12 @@ def paired_bootstrap(outputs_a, outputs_b, lang, units_ds, docs_ds, doc_of=None,
     full = chrf.corpus_score(ha, [refs]).score - chrf.corpus_score(hb, [refs]).score
     return {"lang": lang, "delta_d_chrf": round(full, 2),
             "p_A_not_better": round(sum(d <= 0 for d in diffs) / n, 4)}
+
+
+# ----------------------------------------------------------------------------- COMET worker
+if __name__ == "__main__":
+    import sys
+    if len(sys.argv) > 1 and sys.argv[1] == "--comet-worker":
+        _, _, fin, fout, model_name, bs, gpus = sys.argv
+        data = json.load(open(fin, encoding="utf-8"))
+        json.dump(_comet_predict_inprocess(data, model_name, int(bs), int(gpus)), open(fout, "w"))
