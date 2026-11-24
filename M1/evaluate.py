@@ -59,6 +59,14 @@ def load_records(path):
 _THINK = re.compile(r"<think>.*?</think>", re.S)
 
 
+def _target(r):
+    """Target language of a record: 'trg' if present, else 'lang' (older data files)."""
+    t = r.get("trg") or r.get("lang")
+    if t is None:
+        raise KeyError(f"record {r.get('id')} has neither 'trg' nor 'lang'")
+    return t
+
+
 def _clean_generation(text):
     return _THINK.sub("", text).replace("<think>", "").replace("</think>", "").strip()
 
@@ -85,7 +93,7 @@ def generate_llm(model, tokenizer, records, out_path, batch_size=16, max_new_tok
     # group by target language and level (same max_new_tokens), longest first
     groups = {}
     for r in todo:
-        groups.setdefault((r["trg"], r["level"]), []).append(r)
+        groups.setdefault((_target(r), r["level"]), []).append(r)
     print(f"{len(done)} already done, {len(todo)} to translate")
 
     model.eval()
@@ -314,7 +322,7 @@ def evaluate_language(outputs, lang, units_ds, docs_ds, doc_of=None, glotlid=Non
     comet   : optional dict {"ssa_comet": {...}, "ssa_comet_qe": {...}} from comet_scores,
               segments in the same order as this language's outputs sorted by row_id
     """
-    outs = sorted([o for o in outputs if o["trg"] == lang], key=lambda o: o["row_id"])
+    outs = sorted([o for o in outputs if _target(o) == lang], key=lambda o: o["row_id"])
     if not outs:
         return None
     if doc_of is None:
@@ -399,8 +407,8 @@ def paired_bootstrap(outputs_a, outputs_b, lang, units_ds, docs_ds, doc_of=None,
     """
     if doc_of is None:
         doc_of = map_rows_to_docs(units_ds["en"], docs_ds["en"])
-    ha = realign({o["row_id"]: o["hypothesis"] for o in outputs_a if o["trg"] == lang}, doc_of, len(docs_ds))
-    hb = realign({o["row_id"]: o["hypothesis"] for o in outputs_b if o["trg"] == lang}, doc_of, len(docs_ds))
+    ha = realign({o["row_id"]: o["hypothesis"] for o in outputs_a if _target(o) == lang}, doc_of, len(docs_ds))
+    hb = realign({o["row_id"]: o["hypothesis"] for o in outputs_b if _target(o) == lang}, doc_of, len(docs_ds))
     refs = [norm(r) for r in docs_ds[lang]]
     chrf = sacrebleu.metrics.CHRF()
     rng = random.Random(seed)
