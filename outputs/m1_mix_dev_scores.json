@@ -1,0 +1,8 @@
+{
+  "zero_shot": 52.25,
+  "checkpoint-800": 57.69,
+  "checkpoint-1000": 57.91,
+  "checkpoint-1200": 57.9,
+  "checkpoint-1336": 58.01,
+  "final": 58.01
+}
