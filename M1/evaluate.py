@@ -309,13 +309,13 @@ def _comet_python(env_dir=COMET_ENV):
 def setup_comet_env(env_dir=COMET_ENV, python_version="3.11"):
     """Create the private COMET environment once per runtime (a few minutes)."""
     import subprocess, sys
-    if os.path.exists(_comet_python(env_dir)):
-        print("COMET env ready:", env_dir)
-        return env_dir
     subprocess.run([sys.executable, "-m", "pip", "install", "-q", "uv"], check=True)
-    subprocess.run([sys.executable, "-m", "uv", "venv", env_dir, "--python", python_version], check=True)
+    if not os.path.exists(_comet_python(env_dir)):
+        subprocess.run([sys.executable, "-m", "uv", "venv", env_dir, "--python", python_version], check=True)
+    # setuptools<81 provides pkg_resources, which COMET's torchmetrics still imports;
+    # uv-created envs don't include setuptools. Re-running is quick and repairs an existing env.
     subprocess.run([sys.executable, "-m", "uv", "pip", "install", "--python", _comet_python(env_dir),
-                    "unbabel-comet", "sacrebleu"], check=True)
+                    "unbabel-comet", "sacrebleu", "setuptools<81"], check=True)
     print("COMET env ready:", env_dir)
     return env_dir
 
