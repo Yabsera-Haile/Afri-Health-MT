@@ -223,16 +223,48 @@ _UNIT = re.compile(r"(?<![A-Za-z])(" + "|".join(sorted({re.escape(u.lower()) for
                                                         key=len, reverse=True)) + r")(?![A-Za-z])")
 
 
+_ETH_ONES = {chr(0x1369 + i): i + 1 for i in range(9)}      # ፩..፱ = 1..9
+_ETH_TENS = {chr(0x1372 + i): (i + 1) * 10 for i in range(9)}  # ፲..፺ = 10..90
+_ETH_NUM = re.compile("[\u1369-\u137C]+")
+
+
+def ethiopic_to_int(s):
+    """Ethiopic numerals are additive (no zero): ፲፬=14, ፪፻=200, ፲፪፻፴፬=1234, ፼=10000."""
+    total = block = cur = 0
+    for ch in s:
+        if ch in _ETH_ONES:
+            cur += _ETH_ONES[ch]
+        elif ch in _ETH_TENS:
+            cur += _ETH_TENS[ch]
+        elif ch == "\u137B":                     # ፻ hundred
+            block += (cur or 1) * 100; cur = 0
+        elif ch == "\u137C":                     # ፼ ten thousand
+            total += ((block + cur) or 1) * 10000; block = cur = 0
+    return total + block + cur
+
+
+def _ascii_digits(text):
+    """Ethiopic numerals -> Arabic digits; any other Unicode decimal digit -> ASCII."""
+    text = _ETH_NUM.sub(lambda m: str(ethiopic_to_int(m.group())), text or "")
+    return "".join(str(unicodedata.digit(c)) if c.isdigit() and not c.isascii() else c for c in text)
+
+
 def numbers_in(text):
-    """Digits only (number words are not checked). '1,000' / '1.000' / '1000' -> '1000'."""
+    """Digits only (number words are not checked). '1,000' / '1.000' / '1000' -> '1000'.
+    Ethiopic numerals (e.g. ፲፬) and other scripts' digits are converted first."""
     out = []
-    for m in _NUM.findall(text or ""):
+    for m in _NUM.findall(_ascii_digits(text)):
         parts = re.split(r"[.,]", m)
         if len(parts) > 1 and all(len(p) == 3 for p in parts[1:]):   # thousands separators
             out.append("".join(parts))
         else:
             out.append(m.replace(",", "."))
     return Counter(out)
+
+
+def ethiopic_numeral_count(text):
+    """How many Ethiopic numerals a text contains (diagnostic)."""
+    return len(_ETH_NUM.findall(text or ""))
 
 
 def units_in(text):
@@ -414,7 +446,11 @@ def evaluate_language(outputs, lang, units_ds, docs_ds, doc_of=None, glotlid=Non
     res["numbers_kept_%"] = rate(num)
     res["numbers_kept_ref_%"] = rate(num_ref)          # how often the references themselves keep them
     res["units_kept_%"] = rate(unit)
+    res["units_kept_ref_%"] = rate([units_kept(s, r) for s, r in zip(srcs, refs)])   # how often references keep the symbols
+    res["segments_with_units"] = sum(x is not None for x in unit)
     res["segments_with_numbers"] = sum(x is not None for x in num)
+    res["eth_numerals_%"] = round(100 * sum(ethiopic_numeral_count(h) > 0 for h in hyps) / len(hyps), 2)
+    res["eth_numerals_ref_%"] = round(100 * sum(ethiopic_numeral_count(r) > 0 for r in refs) / len(refs), 2)
 
     cov = [coverage_flags(h, r, o.get("hit_limit")) for h, r, o in zip(hyps, refs, outs)]
     for k in ["empty", "hit_limit", "bad_length", "repetition"]:
