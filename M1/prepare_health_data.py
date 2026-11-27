@@ -8,6 +8,9 @@ ZW = re.compile(r"[\u200b\u200c\u200d\u2060\ufeff]")
 CTRL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 LANG = {"en": "English", "am": "Amharic", "ha": "Hausa",
         "sw": "Swahili", "yo": "Yoruba", "zu": "Zulu"}
+# AFRIDOC-MT revision used to build data/ (data/manifest.json "dataset_sha");
+# same value as evaluate.AFRIDOC_REVISION (kept separate: the COMET worker env lacks `datasets`).
+AFRIDOC_REVISION = "8ae06a3f73aa9194a0d29b32e6c1037b3f9420fb"
 
 def clean_row(row,languages):
   c_row={}
@@ -33,8 +36,8 @@ def filter_by_length(data, tok, max_len):
         ex["n_tokens"] = len(ids)
         if ex["n_tokens"] <= max_len:
             kept.append(ex)
-        else:
-            dropped[(ex["src"], ex["trg"], ex["level"])] += 1
+        else:   # older records have only 'lang' (= target), source is English
+            dropped[(ex.get("src", "en"), ex.get("trg") or ex["lang"], ex["level"])] += 1
     print("dropped:", dict(dropped))
     return kept
 
@@ -57,8 +60,9 @@ def token_len(col,tokenizer,lang,batch=512):
   return np.array(out)
   
 
-def load_mt_dataset(name, config, split, lang1,lang2,tokenizer,is_test=False):
-  dataset=load_dataset(name,config,split=split).select_columns([lang1,lang2])
+def load_mt_dataset(name, config, split, lang1,lang2,tokenizer,is_test=False,revision=AFRIDOC_REVISION):
+  # revision pins the HF dataset version (pass None for the latest)
+  dataset=load_dataset(name,config,split=split,revision=revision).select_columns([lang1,lang2])
   dataset = dataset.map(lambda r, i: {"row_id": i}, with_indices=True) 
   dataset = dataset.map(clean_row, fn_kwargs={"languages": [lang1, lang2]})
   if not is_test:
@@ -86,7 +90,8 @@ def convert_row_to_prompt_translate_psy(row,src,trg,level):
             f"{target_lang}: {source_text}.\n\nTranslation:"
         )
   return {
-        "id": f"{level}-{row['row_id']}-{src}-{trg}", "lang": trg, "level": level, "row_id": row["row_id"],
+        "id": f"{level}-{row['row_id']}-{src}-{trg}", "lang": trg, "src": src, "trg": trg,
+        "level": level, "row_id": row["row_id"],
         "prompt": [{"role": "system", "content": system},
                    {"role": "user", "content": user}],
         "completion": [{"role": "assistant", "content": target_text}],
