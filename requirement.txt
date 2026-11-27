@@ -5,6 +5,7 @@ peft==0.21.3
 trl==1.18.1
 
 bitsandbytes>=0.45
+flash-linear-attention   # GPU (Colab) only: fast Qwen3.5 linear-attention layers
 
 scikit-learn
 numpy
@@ -15,3 +16,6 @@ sentencepiece
 protobuf
 
 sacrebleu
+huggingface_hub
+fasttext                 # GlotLID language ID (evaluate.load_glotlid)
+uv                       # private SSA-COMET env (evaluate.setup_comet_env installs unbabel-comet there)
