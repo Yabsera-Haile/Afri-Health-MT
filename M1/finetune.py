@@ -1,7 +1,7 @@
 from transformers import  AutoProcessor,AutoModelForCausalLM,AutoModelForSeq2SeqLM,AutoModelForSequenceClassification, AutoModelForMultimodalLM, TrainingArguments, Trainer, DataCollatorForSeq2Seq, DataCollatorWithPadding
 import torch
 from peft import LoraConfig, PeftModel, get_peft_model, prepare_model_for_kbit_training
-import math, os, glob,copy
+import math, os, glob, copy, hashlib, json
 
 
 Head= {
@@ -104,23 +104,71 @@ def get_collator(cfg, tokenizer, model=None):
         return DataCollatorWithPadding(tokenizer, pad_to_multiple_of=8)
     raise ValueError(f"No collator for task {cfg['task']}")
 
-def train(cfg, model, tokenizer, train_ds, eval_ds, training_config, smoke_test=False, smoke_steps=50):
-    tc = copy.deepcopy(training_config)        
+_RUN_KEYS = ["learning_rate", "num_train_epochs", "max_steps", "per_device_train_batch_size",
+             "gradient_accumulation_steps", "seed", "lr_scheduler_type", "warmup_ratio", "warmup_steps"]
+
+
+def run_fingerprint(cfg, train_ds, training_config):
+    """What identifies a run: model/adapter config, training data (size + first/last rows) and
+    the main hyperparameters. Stored as <output_dir>/run_info.json."""
+    n = len(train_ds)
+    idx = sorted(set(range(min(20, n))) | set(range(max(0, n - 20), n)))
+    sample = [train_ds[i].get("input_ids", str(train_ds[i])) for i in idx]
+    info = {"model_id": cfg.get("model_id"), "lora_config": cfg.get("lora_config"), "n_train": n,
+            "train_sample_sha1": hashlib.sha1(json.dumps(sample, default=str).encode()).hexdigest(),
+            "args": {k: training_config.get(k) for k in _RUN_KEYS if k in training_config}}
+    return json.loads(json.dumps(info, default=str, sort_keys=True))   # same form as when re-read
+
+
+def should_resume(output_dir, info, resume="auto"):
+    """
+    resume="auto": resume only if output_dir has checkpoints from the SAME run (run_info.json
+    matches); checkpoints from another or an unknown run raise instead of being silently
+    continued (e.g. m1_sent pointed at m1_mix's folder). resume=True/False forces the choice.
+    """
+    ckpts = glob.glob(os.path.join(output_dir, "checkpoint-*"))
+    if resume != "auto":
+        return bool(resume) and bool(ckpts)
+    if not ckpts:
+        return False
+    path = os.path.join(output_dir, "run_info.json")
+    if not os.path.exists(path):
+        raise ValueError(f"{output_dir} has checkpoints but no run_info.json (unknown run). "
+                         "Use a new output_dir, or pass resume=True to continue it anyway.")
+    with open(path) as f:
+        saved = json.load(f)
+    if saved.get("fingerprint") != info:
+        raise ValueError(f"{output_dir} has checkpoints from a different run "
+                         f"(run_info.json differs). Use a new output_dir for this run.")
+    return True
+
+
+def train(cfg, model, tokenizer, train_ds, eval_ds, training_config, smoke_test=False, smoke_steps=50,
+          resume="auto"):
+    tc = copy.deepcopy(training_config)
 
     if smoke_test:
-        tc["output_dir"] = tc["output_dir"].rstrip("/") + "_smoke"  
+        tc["output_dir"] = tc["output_dir"].rstrip("/") + "_smoke"
         tc["max_steps"] = smoke_steps
         tc["save_strategy"] = "no"
         tc["eval_strategy"] = "no"
         tc["logging_steps"] = 5
+
+    info = run_fingerprint(cfg, train_ds, training_config)
+    do_resume = False if smoke_test else should_resume(tc["output_dir"], info, resume)
+    if not smoke_test:
+        os.makedirs(tc["output_dir"], exist_ok=True)
+        with open(os.path.join(tc["output_dir"], "run_info.json"), "w") as f:
+            json.dump({"fingerprint": info, "training_config": tc,
+                       "cfg": {k: v for k, v in cfg.items() if k != "load_kwargs"}},
+                      f, indent=2, default=str)
 
     args = TrainingArguments(**tc)
     trainer = Trainer(model=model, args=args, train_dataset=train_ds,
                       eval_dataset=None if smoke_test else eval_ds,
                       data_collator=get_collator(cfg, tokenizer, model))
 
-    resume = (not smoke_test) and bool(glob.glob(os.path.join(tc["output_dir"], "checkpoint-*")))
-    trainer.train(resume_from_checkpoint=resume)
+    trainer.train(resume_from_checkpoint=do_resume)
 
     if smoke_test:
         steps_done = trainer.state.global_step
